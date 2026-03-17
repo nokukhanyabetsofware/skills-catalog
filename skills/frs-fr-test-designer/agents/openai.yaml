@@ -1,0 +1,4 @@
+interface:
+  display_name: "FRS FR Test Designer"
+  short_description: "Plan-first FRS API/DB automation"
+  default_prompt: "Use $frs-fr-test-designer to produce the 8-section plan-first FRS automation plan from a flow diagram or FRS text, then wait for approval before implementation."

@@ -1,0 +1,196 @@
+name: Sync skills to subscribed repos
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "skills/**"
+      - "subscriptions.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SKILLS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+      SKILLS_SOURCE_REF: ${{ github.sha }}
+    steps:
+      - name: Checkout skills-catalog
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install workflow dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Sync subscribed repos
+        shell: bash
+        env:
+          SYNC_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+        run: |
+          chmod +x "${{ github.workspace }}/tools/sync_to_repo.sh"
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          import yaml
+
+          GITHUB_API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          GITHUB_SHA = os.environ["GITHUB_SHA"]
+          REPO_URL = os.environ["SKILLS_REPO_URL"]
+          SOURCE_REF = os.environ["SKILLS_SOURCE_REF"]
+          TOKEN = os.environ["SYNC_TOKEN"]
+          WORKSPACE = Path(os.environ["GITHUB_WORKSPACE"])
+          SYNC_SCRIPT = WORKSPACE / "tools" / "sync_to_repo.sh"
+          SUBSCRIPTIONS_PATH = WORKSPACE / "subscriptions.yaml"
+          TEMPLATE_PATH = WORKSPACE / ".github" / "PULL_REQUEST_TEMPLATE" / "sync_pr.md"
+
+          def render_template(template: str, values: dict[str, str]) -> str:
+              body = template
+              for key, value in values.items():
+                  body = body.replace(f"{{{{{key}}}}}", value)
+              return body
+
+          def github_request(method: str, path: str, payload: dict | None = None):
+              data = None
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+              request = urllib.request.Request(
+                  f"{GITHUB_API_URL}{path}",
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {TOKEN}",
+                      "Accept": "application/vnd.github+json",
+                      "User-Agent": "skills-catalog-sync",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      payload = response.read().decode("utf-8")
+                      return json.loads(payload) if payload else None
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise RuntimeError(f"GitHub API {method} {path} failed: {exc.code} {detail}") from exc
+
+          def repo_details(repo: str) -> dict:
+              return github_request("GET", f"/repos/{repo}")
+
+          def find_open_pull_request(repo: str, owner: str, branch_name: str) -> dict | None:
+              query = urllib.parse.urlencode({"state": "open", "head": f"{owner}:{branch_name}"})
+              pulls = github_request("GET", f"/repos/{repo}/pulls?{query}")
+              return pulls[0] if pulls else None
+
+          def ensure_pull_request(repo: str, branch_name: str, title: str, body: str) -> None:
+              repo_info = repo_details(repo)
+              owner = repo.split("/", 1)[0]
+              base_branch = repo_info["default_branch"]
+              existing = find_open_pull_request(repo, owner, branch_name)
+              payload = {"title": title, "body": body, "base": base_branch}
+              if existing:
+                  github_request("PATCH", f"/repos/{repo}/pulls/{existing['number']}", payload)
+                  print(f"Updated PR #{existing['number']} for {repo}")
+                  return
+              payload["head"] = branch_name
+              created = github_request("POST", f"/repos/{repo}/pulls", payload)
+              print(f"Created PR #{created['number']} for {repo}")
+
+          with SUBSCRIPTIONS_PATH.open(encoding="utf-8") as handle:
+              subscriptions = yaml.safe_load(handle) or {}
+
+          template = TEMPLATE_PATH.read_text(encoding="utf-8")
+          defaults = subscriptions.get("defaults", {})
+          branch_prefix = defaults.get("branch_prefix", "codex-sync")
+          default_target_path = defaults.get("target_path", ".codex/skills")
+          failures: list[str] = []
+
+          for entry in subscriptions.get("repos", []):
+              repo = entry["repo"]
+              skills = entry.get("skills") or []
+              update_mode = entry.get("update_mode", "pr")
+              target_path = entry.get("target_path", default_target_path)
+
+              if not skills:
+                  print(f"Skipping {repo} (no skills)")
+                  continue
+
+              if update_mode != "pr":
+                  failures.append(f"{repo}: unsupported update_mode '{update_mode}'")
+                  continue
+
+              skills_csv = ",".join(skills)
+              branch_name = f"{branch_prefix}/{GITHUB_SHA[:10]}/{repo.replace('/', '-')}"
+              command = [
+                  str(SYNC_SCRIPT),
+                  repo,
+                  skills_csv,
+                  REPO_URL,
+                  SOURCE_REF,
+                  branch_name,
+                  target_path,
+                  "codex-sync-bot",
+                  "codex-sync-bot@example.com",
+              ]
+              print(f"Running sync for {repo}: {' '.join(command)}")
+              result = subprocess.run(
+                  command,
+                  check=False,
+                  capture_output=True,
+                  text=True,
+                  env=dict(os.environ, SYNC_TOKEN=TOKEN),
+              )
+              if result.stdout:
+                  print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+              if result.stderr:
+                  print(result.stderr, file=sys.stderr, end="" if result.stderr.endswith("\n") else "\n")
+              if result.returncode != 0:
+                  failures.append(f"{repo}: sync failed with exit code {result.returncode}")
+                  continue
+
+              metadata: dict[str, str] = {}
+              for line in result.stdout.splitlines():
+                  if "=" in line:
+                      key, value = line.split("=", 1)
+                      if key.startswith("SYNC_"):
+                          metadata[key] = value
+
+              if metadata.get("SYNC_STATUS") == "no_changes":
+                  print(f"No PR needed for {repo}")
+                  continue
+
+              source_sha = metadata.get("SYNC_SOURCE_SHA", GITHUB_SHA)
+              skills_bullets = "\n".join(f"- `{skill}`" for skill in skills) or "- None"
+              body = render_template(
+                  template,
+                  {
+                      "source_repo": REPO_URL,
+                      "source_sha": source_sha,
+                      "target_repo": repo,
+                      "target_path": target_path,
+                      "sync_metadata_path": metadata.get("SYNC_METADATA_PATH", ""),
+                      "skills_bullets": skills_bullets,
+                  },
+              )
+              title = f"Sync Codex skills from skills-catalog@{source_sha[:10]}"
+              ensure_pull_request(repo, metadata.get("SYNC_BRANCH_NAME", branch_name), title, body)
+
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          PY

@@ -1,0 +1,10 @@
+# subscriptions.yaml
+repos:
+  - repo: "nokukhanyabetsofware/dev-insights-prototype"  # full repo slug (org/repo)
+    skills:
+      - frs-fr-test-designer
+    update_mode: "pr"                # "pr" or "direct"
+# global options
+defaults:
+  branch_prefix: "codex-sync"
+  target_path: ".codex/skills"       # managed path inside downstream repos
