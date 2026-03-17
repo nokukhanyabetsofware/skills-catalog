@@ -11,7 +11,9 @@ trap 'status=$?; echo "sync_to_repo.sh failed near line $LINENO while running: $
 # 6: TARGET_PATH (prefix in target repo, e.g. ".codex/skills")
 # 7: GIT_AUTHOR_NAME
 # 8: GIT_AUTHOR_EMAIL
-# env: SYNC_TOKEN should be set
+# env:
+#   SYNC_TOKEN should be set
+#   TARGET_BASE_BRANCH may be set to control which target branch the sync branch is based on
 
 usage() {
   echo "Usage: $0 TARGET_REPO SKILLS_CSV SKILLS_REPO_URL SKILLS_SOURCE_REF BRANCH_NAME TARGET_PATH [GIT_AUTHOR_NAME] [GIT_AUTHOR_EMAIL]" >&2
@@ -92,7 +94,16 @@ if git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null 2>&1; then
   git fetch origin "$BRANCH_NAME" >/dev/null 2>&1
   git checkout -B "$BRANCH_NAME" "origin/$BRANCH_NAME" >/dev/null 2>&1
 else
-  git checkout -b "$BRANCH_NAME" >/dev/null 2>&1
+  BASE_REF="HEAD"
+  if [ -n "${TARGET_BASE_BRANCH:-}" ]; then
+    echo "Using target base branch $TARGET_BASE_BRANCH"
+    if ! git fetch origin "$TARGET_BASE_BRANCH" >/dev/null 2>&1; then
+      echo "Failed to fetch target base branch $TARGET_BASE_BRANCH from $TARGET_REPO" >&2
+      exit 70
+    fi
+    BASE_REF="origin/$TARGET_BASE_BRANCH"
+  fi
+  git checkout -b "$BRANCH_NAME" "$BASE_REF" >/dev/null 2>&1
 fi
 
 git remote add skills-catalog "$SKILLS_REPO_WITH_TOKEN"
@@ -129,6 +140,9 @@ mkdir -p "$(dirname "$METADATA_PATH")"
   printf 'source_commit: %s\n' "$SOURCE_SHA"
   printf 'synced_at: %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   printf 'target_path: %s\n' "$TARGET_PATH"
+  if [ -n "${TARGET_BASE_BRANCH:-}" ]; then
+    printf 'target_base_branch: %s\n' "$TARGET_BASE_BRANCH"
+  fi
   printf 'skills:\n'
   for skill in "${SYNCED_SKILLS[@]}"; do
     printf '  - %s\n' "$skill"

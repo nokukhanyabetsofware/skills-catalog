@@ -4,7 +4,9 @@ repos:
     skills:
       - frs-fr-test-designer
     update_mode: "pr"                # "pr" or "direct"
+    base_branch: "main"              # optional PR base branch override for this repo
 # global options
 defaults:
   branch_prefix: "codex-sync"
   target_path: ".codex/skills"       # managed path inside downstream repos
+  base_branch: "main"                # optional fallback PR base branch for repos without an override

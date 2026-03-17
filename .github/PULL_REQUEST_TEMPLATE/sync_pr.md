@@ -4,6 +4,7 @@ This PR updates the managed skills under `{{target_path}}` from `{{source_repo}}
 
 **Target repo:** {{target_repo}}
 **Target path:** {{target_path}}
+**Base branch:** {{base_branch}}
 **Source repo:** {{source_repo}}
 **Source commit:** {{source_sha}}
 **Sync metadata:** `{{sync_metadata_path}}`

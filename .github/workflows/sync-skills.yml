@@ -101,12 +101,12 @@ jobs:
               pulls = github_request("GET", f"/repos/{repo}/pulls?{query}")
               return pulls[0] if pulls else None
 
-          def ensure_pull_request(repo: str, branch_name: str, title: str, body: str) -> None:
+          def ensure_pull_request(repo: str, branch_name: str, title: str, body: str, base_branch: str | None) -> None:
               repo_info = repo_details(repo)
               owner = repo.split("/", 1)[0]
-              base_branch = repo_info["default_branch"]
+              resolved_base_branch = base_branch or repo_info["default_branch"]
               existing = find_open_pull_request(repo, owner, branch_name)
-              payload = {"title": title, "body": body, "base": base_branch}
+              payload = {"title": title, "body": body, "base": resolved_base_branch}
               if existing:
                   github_request("PATCH", f"/repos/{repo}/pulls/{existing['number']}", payload)
                   print(f"Updated PR #{existing['number']} for {repo}")
@@ -122,6 +122,7 @@ jobs:
           defaults = subscriptions.get("defaults", {})
           branch_prefix = defaults.get("branch_prefix", "codex-sync")
           default_target_path = defaults.get("target_path", ".codex/skills")
+          default_base_branch = defaults.get("base_branch")
           failures: list[str] = []
 
           for entry in subscriptions.get("repos", []):
@@ -129,6 +130,7 @@ jobs:
               skills = entry.get("skills") or []
               update_mode = entry.get("update_mode", "pr")
               target_path = entry.get("target_path", default_target_path)
+              base_branch = entry.get("base_branch", default_base_branch)
 
               if not skills:
                   print(f"Skipping {repo} (no skills)")
@@ -157,7 +159,11 @@ jobs:
                   check=False,
                   capture_output=True,
                   text=True,
-                  env=dict(os.environ, SYNC_TOKEN=TOKEN),
+                  env=dict(
+                      os.environ,
+                      SYNC_TOKEN=TOKEN,
+                      TARGET_BASE_BRANCH=base_branch or "",
+                  ),
               )
               if result.stdout:
                   print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
@@ -187,12 +193,13 @@ jobs:
                       "source_sha": source_sha,
                       "target_repo": repo,
                       "target_path": target_path,
+                      "base_branch": base_branch or repo_details(repo)["default_branch"],
                       "sync_metadata_path": metadata.get("SYNC_METADATA_PATH", ""),
                       "skills_bullets": skills_bullets,
                   },
               )
               title = f"Sync Codex skills from skills-catalog@{source_sha[:10]}"
-              ensure_pull_request(repo, metadata.get("SYNC_BRANCH_NAME", branch_name), title, body)
+              ensure_pull_request(repo, metadata.get("SYNC_BRANCH_NAME", branch_name), title, body, base_branch)
 
           if failures:
               print("\n".join(failures), file=sys.stderr)
