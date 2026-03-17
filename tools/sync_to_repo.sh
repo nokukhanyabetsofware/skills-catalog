@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'status=$?; echo "sync_to_repo.sh failed near line $LINENO while running: $BASH_COMMAND" >&2; exit $status' ERR
 
 # args:
 # 1: TARGET_REPO (org/repo)
@@ -114,6 +115,7 @@ fi
 git rm -rf --ignore-unmatch "$TARGET_PATH" >/dev/null 2>&1 || true
 rm -rf "$TARGET_PATH"
 mkdir -p "$TARGET_PATH"
+echo "Syncing selected skills into $TARGET_PATH"
 
 for skill in "${SYNCED_SKILLS[@]}"; do
   git archive --format=tar "$SOURCE_SHA" "skills/${skill}" \
@@ -150,8 +152,13 @@ if git diff --quiet --cached; then
 fi
 
 COMMIT_MSG="Sync skills from skills-catalog@${SOURCE_SHA:0:10} -> ${TARGET_PATH}"
-git commit -m "$COMMIT_MSG" >/dev/null 2>&1
-git push "https://x-access-token:${SYNC_TOKEN}@github.com/${TARGET_REPO}.git" HEAD:"$BRANCH_NAME" >/dev/null 2>&1
+echo "Creating sync commit"
+git commit -m "$COMMIT_MSG"
+echo "Pushing branch $BRANCH_NAME to $TARGET_REPO"
+if ! git push "https://x-access-token:${SYNC_TOKEN}@github.com/${TARGET_REPO}.git" HEAD:"$BRANCH_NAME"; then
+  echo "Push failed. Confirm TARGET_REPO_TOKEN has Contents: write access to $TARGET_REPO and can create branches." >&2
+  exit 69
+fi
 
 echo "Pushed sync branch $BRANCH_NAME to $TARGET_REPO"
 echo "SYNC_STATUS=pushed"
