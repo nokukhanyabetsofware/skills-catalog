@@ -115,7 +115,7 @@ For complete planning responses, produce exactly these 8 numbered sections in or
 
 ## Implementation rules
 - Generated test function names must follow `test_<test_case_name>`.
-- Generated test folders and files must not include `fr` as a token.
+- Generated test folders and files must not include `fr or ac` as a token.
 - FR identifiers may appear in prose, traceability tables, and approval planning, but not in generated artifact names.
 - Lean suite is mandatory. Extended suite is conditional.
 - Category buckets are required for implemented suites, not for analysis-only plans.
